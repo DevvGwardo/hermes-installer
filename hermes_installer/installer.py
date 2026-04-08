@@ -15,6 +15,7 @@ from .upstream import script_url
 
 
 LogSink = Callable[[str], None]
+UTF8_BOM = b"\xef\xbb\xbf"
 
 
 @dataclass(frozen=True)
@@ -41,9 +42,22 @@ class HermesInstaller:
         temp_dir = Path(tempfile.mkdtemp(prefix="hermes-installer-"))
         destination = temp_dir / self.platform.script_name
         urlretrieve(script_url(ref, self.platform.script_name), destination)
+        if self.platform.is_windows:
+            self._ensure_utf8_bom(destination)
         if self.platform.is_macos:
             destination.chmod(destination.stat().st_mode | stat.S_IXUSR)
         return destination
+
+    def _ensure_utf8_bom(self, script_path: Path) -> None:
+        raw = script_path.read_bytes()
+        if raw.startswith(UTF8_BOM):
+            return
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            # Leave the file untouched if upstream ever changes encoding.
+            return
+        script_path.write_bytes(UTF8_BOM + text.encode("utf-8"))
 
     def build_install_command(
         self, script_path: Path, options: InstallOptions
@@ -110,6 +124,7 @@ class HermesInstaller:
             bufsize=1,
             env=env,
             encoding="utf-8",
+            errors="replace",
         )
 
         assert process.stdout is not None
