@@ -7,3 +7,5 @@ build/
 dist/
 .venv/
 .DS_Store
+*.p12
+build.keychain-db

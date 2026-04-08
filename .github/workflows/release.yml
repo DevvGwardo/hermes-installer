@@ -31,14 +31,48 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Import Apple Developer ID certificate
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_DEVELOPER_ID_APP_CERT_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_APP_CERT_P12_BASE64 }}
+          APPLE_DEVELOPER_ID_APP_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_APP_CERT_PASSWORD }}
+        run: |
+          if [[ -z "${APPLE_DEVELOPER_ID_APP_CERT_P12_BASE64}" || -z "${APPLE_DEVELOPER_ID_APP_CERT_PASSWORD}" ]]; then
+            echo "Missing Apple signing certificate secrets." >&2
+            exit 1
+          fi
+          CERT_PATH="$RUNNER_TEMP/developer-id-app.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          echo "$APPLE_DEVELOPER_ID_APP_CERT_P12_BASE64" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$APPLE_DEVELOPER_ID_APP_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+          security set-key-partition-list -S apple-tool:,apple: -s -k "" "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
       - name: Build artifact
         shell: bash
+        env:
+          APP_BUNDLE_ID: io.github.devvgwardo.hermes-installer
         run: |
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             pwsh ./scripts/build_windows.ps1
           else
             ./scripts/build_macos.sh
           fi
+
+      - name: Sign and notarize macOS artifact
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_DEVELOPER_ID_APP: ${{ secrets.APPLE_DEVELOPER_ID_APP }}
+          APPLE_NOTARY_APPLE_ID: ${{ secrets.APPLE_NOTARY_APPLE_ID }}
+          APPLE_NOTARY_TEAM_ID: ${{ secrets.APPLE_NOTARY_TEAM_ID }}
+          APPLE_NOTARY_APP_PASSWORD: ${{ secrets.APPLE_NOTARY_APP_PASSWORD }}
+        run: ./scripts/sign_and_notarize_macos.sh
 
       - name: Compute sha256
         shell: bash
@@ -79,4 +113,3 @@ jobs:
             dist-artifacts/**/Hermes-Installer-macOS.zip
             dist-artifacts/**/Hermes-Installer-Windows.exe
             SHA256SUMS.txt
-
