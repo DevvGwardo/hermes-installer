@@ -68,6 +68,40 @@ def test_download_script_windows_rewrites_cp1252_script_with_utf8_bom(monkeypatc
     assert raw.decode("utf-8-sig").startswith('Write-Info "Node.js not found —')
 
 
+def test_download_script_windows_patches_winget_install_timeout(monkeypatch, tmp_path) -> None:
+    platform_spec = PlatformSpec.for_system("Windows")
+    installer = HermesInstaller(platform_spec)
+    temp_dir = tmp_path / "hermes-installer-2"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    source_script = (
+        "    if (Get-Command winget -ErrorAction SilentlyContinue) {\n"
+        "        Write-Info \"Installing via winget...\"\n"
+        "        try {\n"
+        "            winget install OpenJS.NodeJS.LTS --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null\n"
+        "        } catch { }\n"
+        "    }\n"
+    ).encode("utf-8")
+
+    def fake_mkdtemp(prefix: str) -> str:
+        assert prefix == "hermes-installer-"
+        return str(temp_dir)
+
+    def fake_urlretrieve(_url: str, destination: Path):
+        Path(destination).write_bytes(source_script)
+        return (str(destination), None)
+
+    monkeypatch.setattr(installer_module.tempfile, "mkdtemp", fake_mkdtemp)
+    monkeypatch.setattr(installer_module, "urlretrieve", fake_urlretrieve)
+
+    script_path = installer.download_script("v2026.4.8")
+    text = script_path.read_text(encoding="utf-8-sig")
+
+    assert "winget install OpenJS.NodeJS.LTS --silent" not in text
+    assert "$wingetProc = Start-Process -FilePath \"winget\"" in text
+    assert "WaitForExit(180000)" in text
+    assert "continuing with Node zip fallback" in text
+
+
 def test_expected_hermes_path_matches_platform_layout() -> None:
     macos = PlatformSpec.for_system("Darwin")
     windows = PlatformSpec.for_system("Windows")

@@ -17,6 +17,19 @@ from .upstream import script_url
 LogSink = Callable[[str], None]
 UTF8_BOM = b"\xef\xbb\xbf"
 SCRIPT_SOURCE_ENCODINGS = ("utf-8-sig", "cp1252", "latin-1")
+WINGET_INSTALL_LINE = (
+    "            winget install OpenJS.NodeJS.LTS --silent "
+    "--accept-package-agreements --accept-source-agreements 2>&1 | Out-Null"
+)
+WINGET_INSTALL_TIMEOUT_BLOCK = """            $wingetProc = Start-Process -FilePath "winget" -ArgumentList @("install", "OpenJS.NodeJS.LTS", "--silent", "--accept-package-agreements", "--accept-source-agreements") -PassThru -WindowStyle Hidden
+            if (-not $wingetProc.WaitForExit(180000)) {
+                Write-Warn "winget install timed out after 180 seconds; continuing with Node zip fallback"
+                Stop-Process -Id $wingetProc.Id -Force -ErrorAction SilentlyContinue
+                throw "winget timeout"
+            }
+            if ($wingetProc.ExitCode -ne 0) {
+                throw "winget failed with exit code $($wingetProc.ExitCode)"
+            }"""
 
 
 @dataclass(frozen=True)
@@ -51,8 +64,6 @@ class HermesInstaller:
 
     def _ensure_utf8_bom(self, script_path: Path) -> None:
         raw = script_path.read_bytes()
-        if raw.startswith(UTF8_BOM):
-            return
         text: str | None = None
         for encoding in SCRIPT_SOURCE_ENCODINGS:
             try:
@@ -63,7 +74,17 @@ class HermesInstaller:
         if text is None:
             # Last resort: keep data readable for PowerShell parser.
             text = raw.decode("latin-1", errors="replace")
+        text = self._patch_windows_script(text)
         script_path.write_bytes(UTF8_BOM + text.encode("utf-8"))
+
+    def _patch_windows_script(self, text: str) -> str:
+        if "$wingetProc = Start-Process -FilePath \"winget\"" in text:
+            return text
+        if WINGET_INSTALL_LINE not in text:
+            return text
+        newline = "\r\n" if "\r\n" in text else "\n"
+        timeout_block = WINGET_INSTALL_TIMEOUT_BLOCK.replace("\n", newline)
+        return text.replace(WINGET_INSTALL_LINE, timeout_block, 1)
 
     def build_install_command(
         self, script_path: Path, options: InstallOptions
