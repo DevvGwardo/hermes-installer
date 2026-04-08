@@ -2,8 +2,6 @@
 
 Desktop installer for [Hermes Agent](https://github.com/NousResearch/hermes-agent) on macOS and Windows.
 
-![Hermes Installer — Step 1: Choose install location](screenshots/step1-choose-location.png)
-
 This repo exists to give users a real click-install path:
 
 - macOS: download `Hermes-Installer-macOS.zip`, open `Hermes Installer.app`, click `Install Hermes`
