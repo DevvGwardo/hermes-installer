@@ -1,0 +1,82 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            artifact_name: Hermes-Installer-macOS.zip
+            build_script: ./scripts/build_macos.sh
+          - os: windows-latest
+            artifact_name: Hermes-Installer-Windows.exe
+            build_script: ./scripts/build_windows.ps1
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build artifact
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            pwsh ./scripts/build_windows.ps1
+          else
+            ./scripts/build_macos.sh
+          fi
+
+      - name: Compute sha256
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          asset = Path("dist/${{ matrix.artifact_name }}")
+          digest = hashlib.sha256(asset.read_bytes()).hexdigest()
+          Path("dist/SHA256SUMS-${{ runner.os }}.txt").write_text(f"{digest}  {asset.name}\n", encoding="utf-8")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ runner.os }}-release
+          path: |
+            dist/${{ matrix.artifact_name }}
+            dist/SHA256SUMS-${{ runner.os }}.txt
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
+
+      - name: Combine checksums
+        run: |
+          find dist-artifacts -name 'SHA256SUMS-*.txt' -print0 | xargs -0 cat > SHA256SUMS.txt
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist-artifacts/**/Hermes-Installer-macOS.zip
+            dist-artifacts/**/Hermes-Installer-Windows.exe
+            SHA256SUMS.txt
+

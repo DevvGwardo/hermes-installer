@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=69.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermes-installer"
+version = "0.1.0"
+description = "Desktop click-installer for Hermes Agent on macOS and Windows"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "OpenAI Codex" }]
+dependencies = [
+  "PySide6>=6.8,<7",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9",
+  "pyinstaller>=6.15,<7",
+]
+
+[project.scripts]
+hermes-installer = "hermes_installer.cli:main"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+include = ["hermes_installer"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
