@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import hermes_installer.installer as installer_module
 from hermes_installer.installer import HermesInstaller, InstallOptions
 from hermes_installer.platforms import PlatformSpec
 from hermes_installer.upstream import script_url
@@ -55,3 +56,59 @@ def test_expected_hermes_path_matches_platform_layout() -> None:
 
     assert str(macos_path).replace("\\", "/").endswith("venv/bin/hermes")
     assert str(windows_path).replace("\\", "/").endswith("venv/Scripts/hermes.exe")
+
+
+def test_open_terminal_for_command_macos_writes_requested_subcommand(monkeypatch, tmp_path) -> None:
+    platform_spec = PlatformSpec.for_system("Darwin")
+    installer = HermesInstaller(platform_spec)
+    options = InstallOptions(
+        ref="main",
+        install_dir=tmp_path / "hermes-agent",
+        hermes_home=tmp_path / ".hermes",
+    )
+    popen_calls: list[list[str]] = []
+
+    class FakeTempDir:
+        counter = 0
+
+        @classmethod
+        def mkdtemp(cls, prefix: str) -> str:
+            cls.counter += 1
+            path = tmp_path / f"{prefix}{cls.counter}"
+            path.mkdir(parents=True, exist_ok=True)
+            return str(path)
+
+    def fake_popen(command: list[str]) -> None:
+        popen_calls.append(command)
+        return None
+
+    monkeypatch.setattr(installer_module.tempfile, "mkdtemp", FakeTempDir.mkdtemp)
+    monkeypatch.setattr(installer_module.subprocess, "Popen", fake_popen)
+
+    installer.open_terminal_for_command(options, "setup model")
+
+    assert popen_calls == [["open", "-a", "Terminal", str(tmp_path / "hermes-launch-1" / "launch.command")]]
+    launch_script = (tmp_path / "hermes-launch-1" / "launch.command").read_text(encoding="utf-8")
+    assert "venv/bin/hermes setup model" in launch_script
+
+
+def test_open_terminal_for_command_windows_uses_requested_subcommand(monkeypatch) -> None:
+    platform_spec = PlatformSpec.for_system("Windows")
+    installer = HermesInstaller(platform_spec)
+    options = InstallOptions(
+        ref="main",
+        install_dir=Path(r"C:\hermes"),
+        hermes_home=Path(r"C:\.hermes"),
+    )
+    popen_calls: list[list[str]] = []
+
+    def fake_popen(command: list[str]) -> None:
+        popen_calls.append(command)
+        return None
+
+    monkeypatch.setattr(installer_module.subprocess, "Popen", fake_popen)
+
+    installer.open_terminal_for_command(options, "auth")
+
+    assert popen_calls[0][:6] == ["cmd", "/c", "start", "powershell", "-NoExit", "-Command"]
+    assert popen_calls[0][6].replace("\\", "/").endswith("venv/Scripts/hermes.exe auth")

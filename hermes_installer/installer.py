@@ -131,6 +131,9 @@ class HermesInstaller:
     def open_terminal_for_hermes(self, options: InstallOptions) -> None:
         self._open_terminal_with_command(options, None)
 
+    def open_terminal_for_command(self, options: InstallOptions, command: str) -> None:
+        self._open_terminal_with_command(options, command)
+
     def _open_terminal_with_command(self, options: InstallOptions, subcommand: str | None) -> None:
         hermes_executable = self.expected_hermes_executable(options)
         if self.platform.is_windows:
@@ -168,4 +171,3 @@ class HermesInstaller:
         )
         terminal_script.chmod(terminal_script.stat().st_mode | stat.S_IXUSR)
         subprocess.Popen(["open", "-a", "Terminal", str(terminal_script)])
-

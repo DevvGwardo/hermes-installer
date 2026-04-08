@@ -7,7 +7,7 @@ This repo exists to give users a real click-install path:
 - macOS: download `Hermes-Installer-macOS.zip`, open `Hermes Installer.app`, click `Install Hermes`
 - Windows: download `Hermes-Installer-Windows.exe`, open it, click `Install Hermes`
 
-Under the hood, the installer calls the official upstream install scripts from `NousResearch/hermes-agent`, so the desktop UI stays aligned with the actual Hermes install flow instead of forking that logic.
+Under the hood, the installer calls the official upstream install scripts from `NousResearch/hermes-agent`, then hands off to Hermes' own interactive setup commands so provider, OAuth, and model selection stay aligned with upstream behavior instead of being reimplemented here.
 
 ## What It Does
 
@@ -15,7 +15,7 @@ Under the hood, the installer calls the official upstream install scripts from `
 - Downloads the official upstream installer script for the current platform
 - Streams install logs into a desktop window
 - Supports custom install directories and manual ref overrides
-- Opens a terminal window to run `hermes setup` or `hermes` after install
+- Lets the user choose a post-install setup flow and opens Hermes into provider/model setup automatically
 - Builds native desktop artifacts for macOS and Windows in GitHub Actions
 - Publishes a simple GitHub Pages download site with OS-aware buttons
 
