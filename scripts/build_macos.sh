@@ -12,6 +12,7 @@ source "$VENV_DIR/bin/activate"
 
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
+python -m pip install pyte
 
 pyinstaller \
   --noconfirm \
@@ -20,6 +21,8 @@ pyinstaller \
   --name "Hermes Installer" \
   --osx-bundle-identifier "$APP_BUNDLE_ID" \
   --add-data "hermes_installer/assets/banner.png:hermes_installer/assets" \
+  --hidden-import pyte \
+  --hidden-import wcwidth \
   hermes_installer/app.py
 
 ditto -c -k --keepParent "dist/Hermes Installer.app" "dist/Hermes-Installer-macOS.zip"

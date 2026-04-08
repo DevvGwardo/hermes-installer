@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import fcntl
+import os
+import pty
+import signal
+import subprocess
 import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Signal, Qt
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import QObject, Signal, Qt, QSocketNotifier, QTimer
+from PySide6.QtGui import QPixmap, QKeyEvent, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -26,6 +31,11 @@ from PySide6.QtWidgets import (
 )
 
 try:
+    import pyte
+except ImportError:
+    pyte = None
+
+try:
     from .installer import HermesInstaller, InstallOptions
     from .platforms import PlatformSpec
     from .upstream import ResolvedRef, latest_release_ref
@@ -36,10 +46,244 @@ except ImportError:
     from hermes_installer.upstream import ResolvedRef, latest_release_ref
 
 
+# ANSI color palette for terminal rendering
+_ANSI_COLORS = [
+    "#000000",  # black
+    "#cd3131",  # red
+    "#31c353",  # green
+    "#e5e500",  # yellow
+    "#3465a4",  # blue
+    "#bc3fc3",  # magenta
+    "#17a2a2",  # cyan
+    "#e9e9e9",  # white
+    "#7a7a7a",  # bright black
+    "#f14c4c",  # bright red
+    "#4ce54c",  # bright green
+    "#f4f44c",  # bright yellow
+    "#69c4ff",  # bright blue
+    "#f48cf4",  # bright magenta
+    "#4cf4f4",  # bright cyan
+    "#ffffff",  # bright white
+]
+
+
 class UiBridge(QObject):
     resolved = Signal(object)
     log = Signal(str)
     install_finished = Signal(bool, str)
+
+
+class TerminalWidget(QTextEdit):
+    """Embedded terminal that runs a command in a PTY and renders output via pyte."""
+
+    def __init__(
+        self,
+        rows: int = 24,
+        columns: int = 80,
+        font_family: str = "SF Mono, Menlo, Courier, monospace",
+        font_size: int = 13,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._rows = rows
+        self._columns = columns
+        self._font_family = font_family
+        self._font_size = font_size
+        self._pid: int | None = None
+        self._master_fd: int | None = None
+        self._notifier: QSocketNotifier | None = None
+        self._process_finished = False
+
+        self._setup_screen()
+        self._setup_text_edit()
+
+    def _setup_screen(self) -> None:
+        if pyte is None:
+            return
+        self.screen = pyte.Screen(self._columns, self._rows)
+        self.stream = pyte.Stream(self.screen)
+
+    def _setup_text_edit(self) -> None:
+        self.setReadOnly(True)
+        self.setUndoRedoEnabled(False)
+        font = f"{self._font_family} {self._font_size}"
+        self.setStyleSheet(
+            f"""
+            QTextEdit {{
+                background: #0c0c0c;
+                color: #e9e9e9;
+                border: 1px solid #323232;
+                border-radius: 12px;
+                padding: 10px;
+                font-family: "{self._font_family}";
+                font-size: {self._font_size}px;
+            }}
+            """
+        )
+        self._render()
+
+    def _render(self) -> None:
+        if pyte is None:
+            return
+        lines: list[str] = []
+        for row in self.screen.buffer:
+            line = ""
+            for char in row:
+                fg_color = _ANSI_COLORS[char.fg][1:]
+                if char.bold and char.fg < 8:
+                    fg_color = _ANSI_COLORS[char.fg + 8][1:]
+                if char.reverse:
+                    bg_color = _ANSI_COLORS[char.bg][1:]
+                    fg_c = "111" if char.fg == 0 else _ANSI_COLORS[char.fg][1:]
+                    line += f'<span style="color:#{fg_c};background:#{bg_color};">{self._esc(char.data)}</span>'
+                else:
+                    line += f'<span style="color:#{fg_color}">{self._esc(char.data)}</span>'
+            lines.append(line)
+
+        html = "<br>".join(f'<span style="font-family:\'{0}\';font-size:{1}px">{line}</span>'.format(
+            self._font_family, self._font_size, line
+        ) for line in lines)
+        self.setHtml(html)
+        self.moveCursor(QTextCursor.End)
+
+    _ESC_MAP = {
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        " ": "&nbsp;",
+    }
+
+    def _esc(self, ch: str) -> str:
+        return "".join(self._ESC_MAP.get(c, c) for c in ch)
+
+    def start_process(self, argv: list[str], env: dict[str, str] | None = None) -> None:
+        if self._master_fd is not None:
+            self.stop()
+
+        if pyte is None:
+            self.append("<i>pyte not available — terminal view disabled</i>")
+            return
+
+        env = env or {}
+        env["TERM"] = "xterm-256color"
+
+        master_fd, slave_fd = pty.openpty()
+        self._master_fd = master_fd
+
+        # Make master non-blocking
+        flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
+        fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+        pid = os.fork()
+        if pid == 0:
+            # Child
+            os.close(master_fd)
+            os.setsid()
+            os.dup2(slave_fd, 0)
+            os.dup2(slave_fd, 1)
+            os.dup2(slave_fd, 2)
+            os.close(slave_fd)
+            os.execvpe(argv[0], argv, env)
+            os._exit(1)
+
+        # Parent
+        os.close(slave_fd)
+        self._pid = pid
+
+        self._notifier = QSocketNotifier(master_fd, QSocketNotifier.Type.Read, self)
+        self._notifier.activated.connect(self._on_pty_read)
+        QTimer.singleShot(100, self._render)
+
+    def _on_pty_read(self) -> None:
+        if self._master_fd is None:
+            return
+        try:
+            data = os.read(self._master_fd, 4096)
+        except OSError:
+            data = b""
+        if not data:
+            self._check_exit()
+            return
+        try:
+            text = data.decode("utf-8", errors="replace")
+        except Exception:
+            text = data.decode("latin-1", errors="replace")
+        if pyte is not None:
+            self.stream.feed(text)
+        else:
+            self.insertPlainText(text)
+        self._render()
+        QTimer.singleShot(50, self._check_exit)
+
+    def _check_exit(self) -> None:
+        if self._pid is None or self._process_finished:
+            return
+        try:
+            pid, status = os.waitpid(self._pid, os.WNOHANG)
+        except ChildProcessError:
+            self._process_finished = True
+            self._render()
+            return
+        if pid != 0:
+            self._process_finished = True
+            self._render()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        if self._master_fd is None or self._process_finished:
+            super().keyPressEvent(event)
+            return
+        key = event.text()
+        modifiers = event.modifiers()
+        if modifiers & Qt.ControlModifier:
+            ctrl_map = {"c": "\x03", "d": "\x04", "z": "\x1a"}
+            key = ctrl_map.get(event.text().lower(), key)
+        elif event.key() == Qt.Key_Backspace:
+            key = "\x7f"
+        elif event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter:
+            key = "\r"
+        elif event.key() == Qt.Key_Up:
+            key = "\x1b[A"
+        elif event.key() == Qt.Key_Down:
+            key = "\x1b[B"
+        elif event.key() == Qt.Key_Right:
+            key = "\x1b[C"
+        elif event.key() == Qt.Key_Left:
+            key = "\x1b[D"
+        elif event.key() == Qt.Key_Tab:
+            key = "\t"
+        elif event.key() == Qt.Key_Escape:
+            key = "\x1b"
+        else:
+            key = event.text()
+        if key:
+            try:
+                os.write(self._master_fd, key.encode("utf-8"))
+            except OSError:
+                pass
+        self._render()
+
+    def stop(self) -> None:
+        if self._notifier is not None:
+            self._notifier.setEnabled(False)
+            self._notifier.deleteLater()
+            self._notifier = None
+        if self._master_fd is not None:
+            try:
+                os.close(self._master_fd)
+            except OSError:
+                pass
+            self._master_fd = None
+        if self._pid is not None:
+            try:
+                os.kill(self._pid, signal.SIGTERM)
+                os.waitpid(self._pid, 0)
+            except (OSError, ChildProcessError):
+                pass
+            self._pid = None
+        self._process_finished = False
+
+    def is_running(self) -> bool:
+        return self._master_fd is not None and not self._process_finished
 
 
 @dataclass(frozen=True)
@@ -109,6 +353,7 @@ class InstallerWindow(QWidget):
         self.bridge.log.connect(self._append_log)
         self.bridge.install_finished.connect(self._install_finished)
         self._resolve_ref_async()
+        self._check_hermes_running()
 
     def _build_ui(self) -> None:
         self.setWindowTitle("Hermes Installer")
@@ -242,6 +487,10 @@ class InstallerWindow(QWidget):
         self.log_text.setMinimumHeight(220)
         step3["content"].addWidget(self.log_text, 1)
 
+        self.terminal_widget = TerminalWidget(rows=28, columns=100)
+        self.terminal_widget.hide()
+        step3["content"].addWidget(self.terminal_widget, 1)
+
         self.step_stack.addWidget(step3["widget"])
 
         nav_row = QHBoxLayout()
@@ -260,6 +509,51 @@ class InstallerWindow(QWidget):
         self._append_log("Hermes Installer ready.")
         self._update_setup_help()
         self._update_step_controls()
+        self._check_hermes_running()
+
+    def _check_hermes_running(self) -> None:
+        try:
+            result = subprocess.run(
+                ["ps", "axo", "comm"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            running = [
+                line.strip()
+                for line in result.stdout.splitlines()
+                if "hermes" in line.lower()
+                and line.strip()
+                not in (
+                    ".//hermes-installer",
+                    "./-/bundle",
+                    "hermes_installer",
+                    "Hermes Installer",
+                    "hermes-installer",
+                )
+            ]
+        except Exception:
+            return
+
+        if not running:
+            return
+
+        unique = sorted(set(running))
+        names = ", ".join(f"`{p}`" for p in unique[:5])
+        if len(unique) > 5:
+            names += f" and {len(unique) - 5} more"
+
+        QMessageBox.warning(
+            self,
+            "Hermes Is Already Running",
+            (
+                f"Hermes appears to be running: {names}\n\n"
+                "Installing while Hermes is running may cause conflicts or use outdated "
+                "process state. For a clean install, quit Hermes first:\n\n"
+                "  pkill -f hermes\n\n"
+                "Then run the installer again."
+            ),
+        )
 
     def _create_step_card(self, title_text: str, subtitle_text: str) -> dict[str, object]:
         card = QFrame()
@@ -644,26 +938,35 @@ class InstallerWindow(QWidget):
 
         if ok:
             setup_choice = self._selected_setup_choice()
-            if setup_choice.command is None:
-                self.status_label.setText("Install complete. Hermes is ready to launch.")
+            # Switch Step 3 to show the embedded terminal instead of the log
+            self.log_text.hide()
+            self.terminal_widget.show()
+
+            options = self._current_options()
+            hermes_exe = self.installer.expected_hermes_executable(options)
+            if options.create_venv and not hermes_exe.exists():
+                hermes_exe = Path("hermes")
+
+            if setup_choice.command:
+                cmd = [str(hermes_exe), *setup_choice.command.split()]
             else:
-                self.status_label.setText("Install complete. Opening setup next.")
-            self.setup_button.setEnabled(setup_choice.command is not None)
-            self.launch_button.setEnabled(True)
-            if setup_choice.command is not None:
-                self.installer.open_terminal_for_command(self._current_options(), setup_choice.command)
-            QMessageBox.information(
-                self,
-                "Hermes installed",
-                (
-                    "Hermes was installed successfully.\n\n"
-                    + (
-                        "A setup terminal has been opened so the user can choose their provider or OAuth flow."
-                        if setup_choice.command is not None
-                        else "Setup was skipped. Launch Hermes later and run 'hermes setup' if you want to configure a provider."
-                    )
-                ),
+                cmd = [str(hermes_exe)]
+
+            hermes_env = os.environ.copy()
+            hermes_env["HERMES_HOME"] = str(options.hermes_home)
+            hermes_env["PATH"] = (
+                f"{hermes_exe.parent}:"
+                f"{hermes_env.get('PATH', '')}"
             )
+
+            self.terminal_widget.start_process(cmd, hermes_env)
+
+            if setup_choice.command is None:
+                self.status_label.setText("Install complete. Hermes is running above.")
+            else:
+                self.status_label.setText(f"Install complete. Running `{setup_choice.command}` above.")
+            self.setup_button.setEnabled(False)
+            self.launch_button.setEnabled(True)
             return
 
         self.status_label.setText("Install failed. Check the log output.")
