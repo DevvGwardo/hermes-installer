@@ -43,12 +43,12 @@ def test_windows_install_command_uses_powershell() -> None:
     assert "-Branch" in command
 
 
-def test_download_script_windows_rewrites_utf8_with_bom(monkeypatch, tmp_path) -> None:
+def test_download_script_windows_rewrites_cp1252_script_with_utf8_bom(monkeypatch, tmp_path) -> None:
     platform_spec = PlatformSpec.for_system("Windows")
     installer = HermesInstaller(platform_spec)
     temp_dir = tmp_path / "hermes-installer-1"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    source_script = 'Write-Info "Node.js not found — installing Node.js"\n'.encode("utf-8")
+    source_script = 'Write-Info "Node.js not found — installing Node.js"\n'.encode("cp1252")
 
     def fake_mkdtemp(prefix: str) -> str:
         assert prefix == "hermes-installer-"

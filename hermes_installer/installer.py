@@ -16,6 +16,7 @@ from .upstream import script_url
 
 LogSink = Callable[[str], None]
 UTF8_BOM = b"\xef\xbb\xbf"
+SCRIPT_SOURCE_ENCODINGS = ("utf-8-sig", "cp1252", "latin-1")
 
 
 @dataclass(frozen=True)
@@ -52,11 +53,16 @@ class HermesInstaller:
         raw = script_path.read_bytes()
         if raw.startswith(UTF8_BOM):
             return
-        try:
-            text = raw.decode("utf-8")
-        except UnicodeDecodeError:
-            # Leave the file untouched if upstream ever changes encoding.
-            return
+        text: str | None = None
+        for encoding in SCRIPT_SOURCE_ENCODINGS:
+            try:
+                text = raw.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+        if text is None:
+            # Last resort: keep data readable for PowerShell parser.
+            text = raw.decode("latin-1", errors="replace")
         script_path.write_bytes(UTF8_BOM + text.encode("utf-8"))
 
     def build_install_command(
