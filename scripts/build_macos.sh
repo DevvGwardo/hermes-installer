@@ -5,9 +5,13 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 APP_BUNDLE_ID="${APP_BUNDLE_ID:-io.github.devvgwardo.hermes-installer}"
+VENV_DIR="${ROOT_DIR}/.venv"
 
-python3 -m pip install --upgrade pip
-python3 -m pip install -e ".[dev]"
+python3 -m venv "$VENV_DIR"
+source "$VENV_DIR/bin/activate"
+
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
 
 pyinstaller \
   --noconfirm \
