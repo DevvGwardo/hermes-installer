@@ -20,7 +20,8 @@ def test_macos_install_command_uses_bash_and_skip_setup() -> None:
 
     command = installer.build_install_command(Path("/tmp/install.sh"), options)
 
-    assert command[:2] == ["/bin/bash", "/tmp/install.sh"]
+    assert command[0] == "/bin/bash"
+    assert command[1].replace("\\", "/").endswith("/tmp/install.sh")
     assert "--skip-setup" in command
     assert "--branch" in command
 
@@ -52,6 +53,5 @@ def test_expected_hermes_path_matches_platform_layout() -> None:
         InstallOptions(ref="main", install_dir=Path(r"C:\hermes"), hermes_home=Path(r"C:\.hermes"))
     )
 
-    assert str(macos_path).endswith("venv/bin/hermes")
+    assert str(macos_path).replace("\\", "/").endswith("venv/bin/hermes")
     assert str(windows_path).replace("\\", "/").endswith("venv/Scripts/hermes.exe")
-
