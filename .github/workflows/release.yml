@@ -32,6 +32,7 @@ jobs:
           python-version: "3.11"
 
       - name: Import Apple Developer ID certificate
+        id: apple_cert
         if: runner.os == 'macOS'
         shell: bash
         env:
@@ -39,8 +40,9 @@ jobs:
           APPLE_DEVELOPER_ID_APP_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_APP_CERT_PASSWORD }}
         run: |
           if [[ -z "${APPLE_DEVELOPER_ID_APP_CERT_P12_BASE64}" || -z "${APPLE_DEVELOPER_ID_APP_CERT_PASSWORD}" ]]; then
-            echo "Missing Apple signing certificate secrets." >&2
-            exit 1
+            echo "::warning::Missing Apple signing certificate secrets. Publishing unsigned macOS artifact."
+            echo "cert_ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           CERT_PATH="$RUNNER_TEMP/developer-id-app.p12"
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
@@ -52,6 +54,7 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
           security set-key-partition-list -S apple-tool:,apple: -s -k "" "$KEYCHAIN_PATH"
           security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+          echo "cert_ready=true" >> "$GITHUB_OUTPUT"
 
       - name: Build artifact
         shell: bash
@@ -72,7 +75,18 @@ jobs:
           APPLE_NOTARY_APPLE_ID: ${{ secrets.APPLE_NOTARY_APPLE_ID }}
           APPLE_NOTARY_TEAM_ID: ${{ secrets.APPLE_NOTARY_TEAM_ID }}
           APPLE_NOTARY_APP_PASSWORD: ${{ secrets.APPLE_NOTARY_APP_PASSWORD }}
-        run: ./scripts/sign_and_notarize_macos.sh
+        run: |
+          if [[ "${{ steps.apple_cert.outputs.cert_ready }}" != "true" ]]; then
+            echo "::warning::Apple certificate was not imported. Skipping signing/notarization."
+            exit 0
+          fi
+          if [[ -z "${APPLE_DEVELOPER_ID_APP}" || -z "${APPLE_NOTARY_APPLE_ID}" || -z "${APPLE_NOTARY_TEAM_ID}" || -z "${APPLE_NOTARY_APP_PASSWORD}" ]]; then
+            echo "::warning::Missing notarization secrets. Publishing unsigned macOS artifact."
+            exit 0
+          fi
+          if ! ./scripts/sign_and_notarize_macos.sh; then
+            echo "::warning::macOS signing/notarization failed. Publishing unsigned macOS artifact."
+          fi
 
       - name: Compute sha256
         shell: bash
