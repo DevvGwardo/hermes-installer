@@ -9,6 +9,8 @@ This repo exists to give users a real click-install path:
 
 Under the hood, the installer calls the official upstream install scripts from `NousResearch/hermes-agent`, then hands off to Hermes' own interactive setup commands so provider, OAuth, and model selection stay aligned with upstream behavior instead of being reimplemented here.
 
+![Hermes Installer](screenshots/step1-choose-location.png)
+
 ## What It Does
 
 - Resolves the latest stable Hermes release from GitHub and installs that by default
