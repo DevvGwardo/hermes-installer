@@ -45,7 +45,9 @@ class HermesInstaller:
             destination.chmod(destination.stat().st_mode | stat.S_IXUSR)
         return destination
 
-    def build_install_command(self, script_path: Path, options: InstallOptions) -> list[str]:
+    def build_install_command(
+        self, script_path: Path, options: InstallOptions
+    ) -> list[str]:
         if self.platform.is_windows:
             command = [
                 "powershell",
@@ -94,7 +96,9 @@ class HermesInstaller:
         env = os.environ.copy()
         env["HERMES_INSTALL_DIR"] = str(options.install_dir)
 
-        log(f"Downloading installer from {script_url(options.ref, self.platform.script_name)}")
+        log(
+            f"Downloading installer from {script_url(options.ref, self.platform.script_name)}"
+        )
         log(f"Running install for {self.platform.display_name} using ref {options.ref}")
         log(f"Install directory: {options.install_dir}")
 
@@ -105,6 +109,7 @@ class HermesInstaller:
             text=True,
             bufsize=1,
             env=env,
+            encoding="utf-8",
         )
 
         assert process.stdout is not None
@@ -117,13 +122,19 @@ class HermesInstaller:
         shutil.rmtree(script_path.parent, ignore_errors=True)
 
         if return_code != 0:
-            return InstallResult(ok=False, message=f"Installer exited with code {return_code}")
+            return InstallResult(
+                ok=False, message=f"Installer exited with code {return_code}"
+            )
         if options.create_venv and not hermes_executable.exists():
             return InstallResult(
                 ok=False,
                 message=f"Install finished but Hermes executable was not found at {hermes_executable}",
             )
-        return InstallResult(ok=True, message="Hermes installed successfully", hermes_executable=hermes_executable)
+        return InstallResult(
+            ok=True,
+            message="Hermes installed successfully",
+            hermes_executable=hermes_executable,
+        )
 
     def open_terminal_for_setup(self, options: InstallOptions) -> None:
         self._open_terminal_with_command(options, "setup")
@@ -134,11 +145,13 @@ class HermesInstaller:
     def open_terminal_for_command(self, options: InstallOptions, command: str) -> None:
         self._open_terminal_with_command(options, command)
 
-    def _open_terminal_with_command(self, options: InstallOptions, subcommand: str | None) -> None:
+    def _open_terminal_with_command(
+        self, options: InstallOptions, subcommand: str | None
+    ) -> None:
         hermes_executable = self.expected_hermes_executable(options)
         if self.platform.is_windows:
             executable = str(hermes_executable if options.create_venv else "hermes")
-            command = executable if subcommand is None else f'{executable} {subcommand}'
+            command = executable if subcommand is None else f"{executable} {subcommand}"
             subprocess.Popen(
                 [
                     "cmd",
@@ -156,7 +169,9 @@ class HermesInstaller:
         if subcommand:
             command = f"{command} {subcommand}"
 
-        terminal_script = Path(tempfile.mkdtemp(prefix="hermes-launch-")) / "launch.command"
+        terminal_script = (
+            Path(tempfile.mkdtemp(prefix="hermes-launch-")) / "launch.command"
+        )
         terminal_script.write_text(
             "\n".join(
                 [
