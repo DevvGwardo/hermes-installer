@@ -19,6 +19,7 @@ pyinstaller \
   --windowed \
   --name "Hermes Installer" \
   --osx-bundle-identifier "$APP_BUNDLE_ID" \
+  --add-data "hermes_installer/assets/banner.png:hermes_installer/assets" \
   hermes_installer/app.py
 
 ditto -c -k --keepParent "dist/Hermes Installer.app" "dist/Hermes-Installer-macOS.zip"
