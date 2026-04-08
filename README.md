@@ -1,110 +1,175 @@
-# Hermes Installer
+<p align="center">
+  <img src="hermes_installer/assets/banner.png" alt="Hermes Agent" width="500">
+</p>
 
-Desktop installer for [Hermes Agent](https://github.com/NousResearch/hermes-agent) on macOS and Windows.
+<h1 align="center">Hermes Installer</h1>
 
-This repo exists to give users a real click-install path:
+<p align="center">
+  <strong>One-click desktop installer for <a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a></strong>
+</p>
 
-- macOS: download `Hermes-Installer-macOS.zip`, open `Hermes Installer.app`, click `Install Hermes`
-- Windows: download `Hermes-Installer-Windows.exe`, open it, click `Install Hermes`
+<p align="center">
+  <a href="https://devvgwardo.github.io/hermes-installer/">
+    <img src="https://img.shields.io/badge/Download-Latest_Release-e5a632?style=for-the-badge&logo=github&logoColor=white" alt="Download">
+  </a>
+</p>
 
-Under the hood, the installer calls the official upstream install scripts from `NousResearch/hermes-agent`, then hands off to Hermes' own interactive setup commands so provider, OAuth, and model selection stay aligned with upstream behavior instead of being reimplemented here.
+<p align="center">
+  <img src="https://img.shields.io/github/v/release/DevvGwardo/hermes-installer?style=flat-square&label=Release" alt="Release">
+  <img src="https://img.shields.io/github/license/DevvGwardo/hermes-installer?style=flat-square&color=blue" alt="License">
+  <img src="https://img.shields.io/github/actions/workflow/status/DevvGwardo/hermes-installer/test.yml?style=flat-square&label=Tests" alt="Tests">
+  <img src="https://img.shields.io/github/actions/workflow/status/DevvGwardo/hermes-installer/release.yml?style=flat-square&label=Release%20Build" alt="Release Build">
+  <img src="https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey?style=flat-square" alt="Platforms">
+</p>
 
-![Hermes Installer](screenshots/step1-choose-location.png)
+---
 
-## What It Does
+<p align="center">
+  <a href="https://devvgwardo.github.io/hermes-installer/">
+    <img src="https://img.shields.io/badge/macOS-Download-darkgreen?style=for-the-badge&logo=apple&logoColor=white" alt="macOS Download">
+  </a>
+  &nbsp;
+  <a href="https://devvgwardo.github.io/hermes-installer/">
+    <img src="https://img.shields.io/badge/Windows-Download-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows Download">
+  </a>
+</p>
 
-- Resolves the latest stable Hermes release from GitHub and installs that by default
-- Downloads the official upstream installer script for the current platform
-- Streams install logs into a desktop window
-- Supports custom install directories and manual ref overrides
-- Lets the user choose a post-install setup flow and opens Hermes into provider/model setup automatically
-- Builds native desktop artifacts for macOS and Windows in GitHub Actions
-- Publishes a simple GitHub Pages download site with OS-aware buttons
+---
 
-## Repo Layout
+![Hermes Installer Screenshot](screenshots/step1-choose-location.png)
 
-- `hermes_installer/` application code
-- `tests/` unit tests for platform and command generation
-- `scripts/` local build helpers
-- `site/` static download page for GitHub Pages
-- `.github/workflows/` CI, release, and Pages automation
+## ✨ Features
 
-## Local Development
+| Feature | Description |
+|---------|-------------|
+| 🚀 **One-Click Install** | Download, open, click <kbd>Install Hermes</kbd> — done |
+| 📦 **Latest Stable by Default** | Resolves the latest Hermes release from GitHub automatically |
+| 📜 **Streaming Logs** | Watch installation progress in real-time inside the app |
+| ⚙️ **Custom Installs** | Choose your install directory or specify a custom version/ref |
+| 🔄 **Auto Setup** | Opens `hermes setup` after install for provider, OAuth & model config |
+| 🔒 **Official Scripts** | Calls upstream install scripts directly — no forks, no reimplementations |
+| 💻 **Native Desktop** | Builds native `.app` (macOS) and `.exe` (Windows) in CI |
+
+## 📥 Download
+
+| Platform | File | Requirements |
+|----------|------|-------------|
+| macOS | [`Hermes-Installer-macOS.zip`][macOS] | macOS 11 (Big Sur) or later |
+| Windows | [`Hermes-Installer-Windows.exe`][Windows] | Windows 10/11 (64-bit) |
+
+[macOS]: https://github.com/DevvGwardo/hermes-installer/releases/latest/download/Hermes-Installer-macOS.zip
+[Windows]: https://github.com/DevvGwardo/hermes-installer/releases/latest/download/Hermes-Installer-Windows.exe
+
+> **Checksums** — Verify downloads with [`SHA256SUMS.txt`](https://github.com/DevvGwardo/hermes-installer/releases/latest/download/SHA256SUMS.txt)
+
+## 🛠 Quick Start
+
+1. **Download** the installer for your platform from the table above or the [latest release][releases]
+2. **Open** the app — on macOS you may need to right-click → Open the first time
+3. **Click** <kbd>Install Hermes</kbd> and follow the prompts
+
+[releases]: https://github.com/DevvGwardo/hermes-installer/releases/latest
+
+That's it. The installer pulls the official Hermes install script from [`NousResearch/hermes-agent`](https://github.com/NousResearch/hermes-agent) and sets everything up.
+
+## 🧑‍💻 Local Development
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
+
+# Run tests
 pytest
+
+# Preview the install plan
 python -m hermes_installer.cli plan
+
+# Launch the GUI
 python -m hermes_installer.app
 ```
 
-## Build Locally
+## 🔨 Build Locally
 
-macOS:
+**macOS:**
 
 ```bash
 ./scripts/build_macos.sh
 ```
 
-To sign and notarize a local macOS build, export these env vars first and then run:
+**macOS (signed & notarized):**
 
 ```bash
+# Set the required Apple signing env vars first
 ./scripts/sign_and_notarize_macos.sh
 ```
 
-Windows:
+**Windows:**
 
 ```powershell
 ./scripts/build_windows.ps1
 ```
 
-## Release Artifacts
+## 📁 Repo Layout
 
-The release workflow produces these assets:
+```
+hermes_installer/     → Application code (PySide6 GUI + CLI)
+tests/                → Unit tests for platform & command generation
+scripts/              → Local build helpers (macOS / Windows)
+site/                 → Static download page (GitHub Pages)
+.github/workflows/    → CI, release & Pages automation
+```
 
-- `Hermes-Installer-macOS.zip`
-- `Hermes-Installer-Windows.exe`
-- `SHA256SUMS.txt`
+## 📦 Release Artifacts
 
-The static download page expects those exact names.
+The [`release.yml`][workflow] workflow produces:
 
-## macOS Signing And Notarization
+| Artifact | Description |
+|----------|-------------|
+| `Hermes-Installer-macOS.zip` | Signed & notarized macOS app bundle |
+| `Hermes-Installer-Windows.exe` | Standalone Windows executable |
+| `SHA256SUMS.txt` | Integrity checksums for all artifacts |
 
-Unsigned macOS apps trigger the Gatekeeper warning:
+[workflow]: ./.github/workflows/release.yml
 
-> Apple could not verify "Hermes Installer" is free of malware that may harm your Mac or compromise your privacy.
+## 🍎 macOS Signing & Notarization
 
-To ship a Gatekeeper-clean macOS build, configure these GitHub Actions secrets:
+Unsigned macOS builds trigger a Gatekeeper warning. To ship a clean build, configure these **GitHub Actions secrets**:
 
-- `APPLE_DEVELOPER_ID_APP`
-  Example: `Developer ID Application: Your Name (TEAMID)`
-- `APPLE_DEVELOPER_ID_APP_CERT_P12_BASE64`
-  Base64-encoded `.p12` certificate export containing the Developer ID Application cert
-- `APPLE_DEVELOPER_ID_APP_CERT_PASSWORD`
-  Password for that `.p12`
-- `APPLE_NOTARY_APPLE_ID`
-  Apple ID email used for notarization
-- `APPLE_NOTARY_TEAM_ID`
-  Apple Developer Team ID
-- `APPLE_NOTARY_APP_PASSWORD`
-  App-specific password for notary submission
+| Secret | Description |
+|--------|-------------|
+| `APPLE_DEVELOPER_ID_APP` | e.g. `Developer ID Application: Your Name (TEAMID)` |
+| `APPLE_DEVELOPER_ID_APP_CERT_P12_BASE64` | Base64-encoded `.p12` certificate export |
+| `APPLE_DEVELOPER_ID_APP_CERT_PASSWORD` | Password for the `.p12` |
+| `APPLE_NOTARY_APPLE_ID` | Apple ID email for notarization |
+| `APPLE_NOTARY_TEAM_ID` | Apple Developer Team ID |
+| `APPLE_NOTARY_APP_PASSWORD` | App-specific password for notary submission |
 
-Once those are set, tagged releases sign the `.app`, notarize it with Apple, staple the ticket, and then upload the notarized zip.
+Once configured, tagged releases will automatically sign, notarize, staple, and upload the macOS build.
 
-## Publishing
+## 🚢 Publishing
 
-1. Push the repo to GitHub.
-2. Create a release tag such as `v0.1.0`.
-3. Let the `release.yml` workflow build and attach artifacts.
-4. Enable GitHub Pages for the repo using the Actions workflow.
-5. For trusted macOS downloads, set the Apple signing/notarization secrets before tagging a release.
+1. Push the repo to GitHub
+2. Create a release tag (e.g. `v0.1.0`)
+3. The [`release.yml`][workflow] workflow builds and attaches artifacts
+4. Enable **GitHub Pages** using the Actions workflow
+5. For trusted macOS downloads, set the Apple signing secrets **before** tagging
 
-## Notes
+## ⚠️ Notes
 
-- The installer is a UI wrapper around the upstream Hermes install scripts, not a fork of Hermes itself.
-- The installer defaults to the latest stable upstream Hermes release tag. If GitHub API resolution fails, it falls back to `main`.
-- Hermes itself remains upstream in `NousResearch/hermes-agent`.
-- Without Apple signing credentials configured, macOS artifacts will build but will not pass Gatekeeper verification.
+- This is a **UI wrapper** around upstream Hermes install scripts — not a fork of Hermes itself
+- Defaults to the **latest stable** Hermes release; falls back to `main` if GitHub API resolution fails
+- Hermes stays upstream at [`NousResearch/hermes-agent`](https://github.com/NousResearch/hermes-agent)
+- Without Apple signing credentials, macOS builds **will not pass Gatekeeper**
+
+## 📄 License
+
+This project is licensed under the [MIT License](LICENSE).
+
+<p align="center">
+  <a href="https://github.com/NousResearch/hermes-agent">
+    <img src="https://img.shields.io/badge/Powered%20by-Hermes%20Agent-e5a632?style=flat-square" alt="Powered by Hermes Agent">
+  </a>
+</p>
