@@ -89,7 +89,7 @@ def test_open_terminal_for_command_macos_writes_requested_subcommand(monkeypatch
 
     assert popen_calls == [["open", "-a", "Terminal", str(tmp_path / "hermes-launch-1" / "launch.command")]]
     launch_script = (tmp_path / "hermes-launch-1" / "launch.command").read_text(encoding="utf-8")
-    assert "venv/bin/hermes setup model" in launch_script
+    assert "venv/bin/hermes setup model" in launch_script.replace("\\", "/")
 
 
 def test_open_terminal_for_command_windows_uses_requested_subcommand(monkeypatch) -> None:
