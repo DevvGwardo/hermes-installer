@@ -1,16 +1,23 @@
 from __future__ import annotations
 
-import fcntl
 import os
-import pty
-import signal
+import platform
 import subprocess
 import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Signal, Qt, QSocketNotifier, QTimer
+IS_WINDOWS = platform.system() == "Windows"
+
+_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+if not IS_WINDOWS:
+    import fcntl
+    import pty
+    import signal
+
+from PySide6.QtCore import QObject, Signal, Qt, QTimer
 from PySide6.QtGui import QPixmap, QKeyEvent, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
@@ -30,6 +37,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+if not IS_WINDOWS:
+    from PySide6.QtCore import QSocketNotifier
+
 try:
     import pyte
 except ImportError:
@@ -40,7 +50,6 @@ try:
     from .platforms import PlatformSpec
     from .upstream import ResolvedRef, latest_release_ref
 except ImportError:
-    # Allows running from frozen app entrypoints where relative imports are unavailable.
     from hermes_installer.installer import HermesInstaller, InstallOptions
     from hermes_installer.platforms import PlatformSpec
     from hermes_installer.upstream import ResolvedRef, latest_release_ref
@@ -74,16 +83,26 @@ class UiBridge(QObject):
 
 
 class TerminalWidget(QTextEdit):
-    """Embedded terminal that runs a command in a PTY and renders output via pyte."""
+    """Embedded terminal that runs a command and renders output.
+
+    On macOS/Linux it uses a PTY with pyte for full ANSI rendering.
+    On Windows it uses subprocess with pipes for display-only output.
+    """
 
     def __init__(
         self,
         rows: int = 24,
         columns: int = 80,
-        font_family: str = "SF Mono, Menlo, Courier, monospace",
+        font_family: str | None = None,
         font_size: int = 13,
         parent: QWidget | None = None,
     ) -> None:
+        if font_family is None:
+            font_family = (
+                "Consolas, Courier New, monospace"
+                if IS_WINDOWS
+                else "SF Mono, Menlo, Courier, monospace"
+            )
         super().__init__(parent)
         self._rows = rows
         self._columns = columns
@@ -91,14 +110,16 @@ class TerminalWidget(QTextEdit):
         self._font_size = font_size
         self._pid: int | None = None
         self._master_fd: int | None = None
-        self._notifier: QSocketNotifier | None = None
+        self._notifier: object | None = None
         self._process_finished = False
+        self._subprocess: subprocess.Popen | None = None
+        self._poll_timer: QTimer | None = None
 
         self._setup_screen()
         self._setup_text_edit()
 
     def _setup_screen(self) -> None:
-        if pyte is None:
+        if IS_WINDOWS or pyte is None:
             return
         self.screen = pyte.Screen(self._columns, self._rows)
         self.stream = pyte.Stream(self.screen)
@@ -123,7 +144,7 @@ class TerminalWidget(QTextEdit):
         self._render()
 
     def _render(self) -> None:
-        if pyte is None:
+        if IS_WINDOWS or pyte is None:
             return
         lines: list[str] = []
         for row in self.screen.buffer:
@@ -137,12 +158,17 @@ class TerminalWidget(QTextEdit):
                     fg_c = "111" if char.fg == 0 else _ANSI_COLORS[char.fg][1:]
                     line += f'<span style="color:#{fg_c};background:#{bg_color};">{self._esc(char.data)}</span>'
                 else:
-                    line += f'<span style="color:#{fg_color}">{self._esc(char.data)}</span>'
+                    line += (
+                        f'<span style="color:#{fg_color}">{self._esc(char.data)}</span>'
+                    )
             lines.append(line)
 
-        html = "<br>".join(f'<span style="font-family:\'{0}\';font-size:{1}px">{line}</span>'.format(
-            self._font_family, self._font_size, line
-        ) for line in lines)
+        html = "<br>".join(
+            f"<span style=\"font-family:'{0}';font-size:{1}px\">{line}</span>".format(
+                self._font_family, self._font_size, line
+            )
+            for line in lines
+        )
         self.setHtml(html)
         self.moveCursor(QTextCursor.End)
 
@@ -157,9 +183,65 @@ class TerminalWidget(QTextEdit):
         return "".join(self._ESC_MAP.get(c, c) for c in ch)
 
     def start_process(self, argv: list[str], env: dict[str, str] | None = None) -> None:
-        if self._master_fd is not None:
+        if self._subprocess is not None or self._master_fd is not None:
             self.stop()
 
+        if IS_WINDOWS:
+            self._start_process_windows(argv, env)
+        else:
+            self._start_process_unix(argv, env)
+
+    def _start_process_windows(
+        self, argv: list[str], env: dict[str, str] | None = None
+    ) -> None:
+        merged_env = os.environ.copy()
+        if env:
+            merged_env.update(env)
+        try:
+            proc = subprocess.Popen(
+                argv,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                env=merged_env,
+                bufsize=1,
+                text=True,
+                creationflags=_CREATE_NO_WINDOW,
+            )
+        except Exception as exc:
+            self.append(f"<i>Failed to start process: {exc}</i>")
+            return
+        self._subprocess = proc
+        self._process_finished = False
+        self.insertPlainText(f"$ {subprocess.list2cmdline(argv)}\n")
+        self._poll_timer = QTimer(self)
+        self._poll_timer.timeout.connect(self._poll_windows_output)
+        self._poll_timer.start(50)
+
+    def _poll_windows_output(self) -> None:
+        if self._subprocess is None:
+            return
+        proc = self._subprocess
+        try:
+            line = proc.stdout.readline()
+        except Exception:
+            line = None
+        if line:
+            self.insertPlainText(line)
+            self.moveCursor(QTextCursor.End)
+        if proc.poll() is not None:
+            remaining = proc.stdout.read()
+            if remaining:
+                self.insertPlainText(remaining)
+            self.moveCursor(QTextCursor.End)
+            self._process_finished = True
+            if self._poll_timer is not None:
+                self._poll_timer.stop()
+                self._poll_timer = None
+            self._subprocess = None
+
+    def _start_process_unix(
+        self, argv: list[str], env: dict[str, str] | None = None
+    ) -> None:
         if pyte is None:
             self.append("<i>pyte not available — terminal view disabled</i>")
             return
@@ -170,13 +252,11 @@ class TerminalWidget(QTextEdit):
         master_fd, slave_fd = pty.openpty()
         self._master_fd = master_fd
 
-        # Make master non-blocking
         flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
         fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
         pid = os.fork()
         if pid == 0:
-            # Child
             os.close(master_fd)
             os.setsid()
             os.dup2(slave_fd, 0)
@@ -186,7 +266,6 @@ class TerminalWidget(QTextEdit):
             os.execvpe(argv[0], argv, env)
             os._exit(1)
 
-        # Parent
         os.close(slave_fd)
         self._pid = pid
 
@@ -229,7 +308,7 @@ class TerminalWidget(QTextEdit):
             self._render()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
-        if self._master_fd is None or self._process_finished:
+        if IS_WINDOWS or self._master_fd is None or self._process_finished:
             super().keyPressEvent(event)
             return
         key = event.text()
@@ -263,6 +342,9 @@ class TerminalWidget(QTextEdit):
         self._render()
 
     def stop(self) -> None:
+        if self._poll_timer is not None:
+            self._poll_timer.stop()
+            self._poll_timer = None
         if self._notifier is not None:
             self._notifier.setEnabled(False)
             self._notifier.deleteLater()
@@ -280,9 +362,21 @@ class TerminalWidget(QTextEdit):
             except (OSError, ChildProcessError):
                 pass
             self._pid = None
+        if self._subprocess is not None:
+            try:
+                self._subprocess.terminate()
+                self._subprocess.wait(timeout=5)
+            except Exception:
+                try:
+                    self._subprocess.kill()
+                except Exception:
+                    pass
+            self._subprocess = None
         self._process_finished = False
 
     def is_running(self) -> bool:
+        if IS_WINDOWS:
+            return self._subprocess is not None and not self._process_finished
         return self._master_fd is not None and not self._process_finished
 
 
@@ -513,25 +607,43 @@ class InstallerWindow(QWidget):
 
     def _check_hermes_running(self) -> None:
         try:
-            result = subprocess.run(
-                ["ps", "axo", "comm"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            running = [
-                line.strip()
-                for line in result.stdout.splitlines()
-                if "hermes" in line.lower()
-                and line.strip()
-                not in (
-                    ".//hermes-installer",
-                    "./-/bundle",
-                    "hermes_installer",
-                    "Hermes Installer",
-                    "hermes-installer",
+            if IS_WINDOWS:
+                result = subprocess.run(
+                    ["tasklist", "/fo", "csv", "/nh"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
                 )
-            ]
+                running = []
+                for line in result.stdout.splitlines():
+                    lower = line.lower()
+                    if (
+                        "hermes" in lower
+                        and "hermes-installer" not in lower
+                        and "hermes_installer" not in lower
+                    ):
+                        name = line.split(",")[0].strip('"')
+                        running.append(name)
+            else:
+                result = subprocess.run(
+                    ["ps", "axo", "comm"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                running = [
+                    line.strip()
+                    for line in result.stdout.splitlines()
+                    if "hermes" in line.lower()
+                    and line.strip()
+                    not in (
+                        ".//hermes-installer",
+                        "./-/bundle",
+                        "hermes_installer",
+                        "Hermes Installer",
+                        "hermes-installer",
+                    )
+                ]
         except Exception:
             return
 
@@ -543,19 +655,23 @@ class InstallerWindow(QWidget):
         if len(unique) > 5:
             names += f" and {len(unique) - 5} more"
 
+        kill_cmd = "taskkill /f /im hermes.exe" if IS_WINDOWS else "pkill -f hermes"
+        kill_label = "Task Manager" if IS_WINDOWS else "pkill -f hermes"
         QMessageBox.warning(
             self,
             "Hermes Is Already Running",
             (
                 f"Hermes appears to be running: {names}\n\n"
                 "Installing while Hermes is running may cause conflicts or use outdated "
-                "process state. For a clean install, quit Hermes first:\n\n"
-                "  pkill -f hermes\n\n"
+                f"process state. For a clean install, quit Hermes first:\n\n"
+                f"  {kill_cmd}\n\n"
                 "Then run the installer again."
             ),
         )
 
-    def _create_step_card(self, title_text: str, subtitle_text: str) -> dict[str, object]:
+    def _create_step_card(
+        self, title_text: str, subtitle_text: str
+    ) -> dict[str, object]:
         card = QFrame()
         card.setObjectName("stepCard")
         layout = QVBoxLayout(card)
@@ -656,9 +772,13 @@ class InstallerWindow(QWidget):
         self.resolved_ref = resolved
         self.ref_input.setText(resolved.ref)
         if resolved.source == "release":
-            self.status_label.setText(f"Ready. Defaulting to Hermes release {resolved.ref}.")
+            self.status_label.setText(
+                f"Ready. Defaulting to Hermes release {resolved.ref}."
+            )
         else:
-            self.status_label.setText("Ready. GitHub release lookup failed, defaulting to main.")
+            self.status_label.setText(
+                "Ready. GitHub release lookup failed, defaulting to main."
+            )
 
     def _append_log(self, line: str) -> None:
         self.log_text.append(line)
@@ -954,9 +1074,9 @@ class InstallerWindow(QWidget):
 
             hermes_env = os.environ.copy()
             hermes_env["HERMES_HOME"] = str(options.hermes_home)
+            path_sep = ";" if IS_WINDOWS else ":"
             hermes_env["PATH"] = (
-                f"{hermes_exe.parent}:"
-                f"{hermes_env.get('PATH', '')}"
+                f"{hermes_exe.parent}{path_sep}{hermes_env.get('PATH', '')}"
             )
 
             self.terminal_widget.start_process(cmd, hermes_env)
@@ -964,7 +1084,9 @@ class InstallerWindow(QWidget):
             if setup_choice.command is None:
                 self.status_label.setText("Install complete. Hermes is running above.")
             else:
-                self.status_label.setText(f"Install complete. Running `{setup_choice.command}` above.")
+                self.status_label.setText(
+                    f"Install complete. Running `{setup_choice.command}` above."
+                )
             self.setup_button.setEnabled(False)
             self.launch_button.setEnabled(True)
             return
