@@ -160,6 +160,42 @@ def test_run_install_uses_replace_for_output_decode(monkeypatch, tmp_path) -> No
     assert popen_kwargs["errors"] == "replace"
 
 
+def test_uninstall_removes_install_dir_and_home(monkeypatch, tmp_path) -> None:
+    platform_spec = PlatformSpec.for_system("Darwin")
+    installer = HermesInstaller(platform_spec)
+    install_dir = tmp_path / "hermes-agent"
+    hermes_home = tmp_path / ".hermes"
+    (install_dir / "venv" / "bin").mkdir(parents=True, exist_ok=True)
+    (hermes_home / "logs").mkdir(parents=True, exist_ok=True)
+    (install_dir / "venv" / "bin" / "hermes").write_text("", encoding="utf-8")
+    (hermes_home / "logs" / "x.log").write_text("x", encoding="utf-8")
+
+    options = InstallOptions(ref="main", install_dir=install_dir, hermes_home=hermes_home)
+    monkeypatch.setattr(installer, "_best_effort_stop_runtime_processes", lambda _log: None)
+
+    result = installer.uninstall(options, log=lambda _line: None)
+
+    assert result.ok is True
+    assert install_dir.exists() is False
+    assert hermes_home.exists() is False
+
+
+def test_uninstall_reports_when_not_present(monkeypatch, tmp_path) -> None:
+    platform_spec = PlatformSpec.for_system("Darwin")
+    installer = HermesInstaller(platform_spec)
+    options = InstallOptions(
+        ref="main",
+        install_dir=tmp_path / "missing-hermes-agent",
+        hermes_home=tmp_path / "missing-hermes-home",
+    )
+    monkeypatch.setattr(installer, "_best_effort_stop_runtime_processes", lambda _log: None)
+
+    result = installer.uninstall(options, log=lambda _line: None)
+
+    assert result.ok is True
+    assert "not found" in result.message.lower()
+
+
 def test_open_terminal_for_command_macos_writes_requested_subcommand(monkeypatch, tmp_path) -> None:
     platform_spec = PlatformSpec.for_system("Darwin")
     installer = HermesInstaller(platform_spec)

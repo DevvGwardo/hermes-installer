@@ -178,6 +178,121 @@ class HermesInstaller:
             hermes_executable=hermes_executable,
         )
 
+    def uninstall(self, options: InstallOptions, log: LogSink) -> InstallResult:
+        self._best_effort_stop_runtime_processes(log)
+        if self.platform.is_windows:
+            self._best_effort_clear_windows_env(options, log)
+
+        removed: list[str] = []
+        errors: list[str] = []
+
+        for target in (options.install_dir, options.hermes_home):
+            self._remove_path(target, removed, errors, log)
+
+        if errors:
+            return InstallResult(
+                ok=False,
+                message="Uninstall completed with errors: " + "; ".join(errors),
+            )
+        if removed:
+            return InstallResult(ok=True, message="Hermes uninstalled successfully")
+        return InstallResult(ok=True, message="Hermes installation was not found")
+
+    def _remove_path(
+        self,
+        target: Path,
+        removed: list[str],
+        errors: list[str],
+        log: LogSink,
+    ) -> None:
+        if not target.exists():
+            return
+        try:
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+            removed.append(str(target))
+            log(f"Removed {target}")
+        except Exception as exc:
+            errors.append(f"{target}: {exc}")
+            log(f"Failed to remove {target}: {exc}")
+
+    def _best_effort_stop_runtime_processes(self, log: LogSink) -> None:
+        try:
+            if self.platform.is_windows:
+                subprocess.run(
+                    ["taskkill", "/f", "/im", "hermes.exe"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    timeout=5,
+                )
+            else:
+                for pattern in (
+                    r"hermes-agent/.*/venv/bin/hermes",
+                    r"python.*-m hermes_cli",
+                    r"hermes_cli.main",
+                ):
+                    subprocess.run(
+                        ["pkill", "-f", pattern],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        timeout=5,
+                    )
+        except Exception as exc:
+            log(f"Warning: could not stop Hermes processes cleanly: {exc}")
+
+    def _best_effort_clear_windows_env(self, options: InstallOptions, log: LogSink) -> None:
+        script = (
+            '$installDir = $env:HERMES_UNINSTALL_INSTALL_DIR\n'
+            '$homeDir = $env:HERMES_UNINSTALL_HOME\n'
+            '$normalize = { param([string]$p) if (-not $p) { return "" } return $p.Trim().TrimEnd("\\").ToLowerInvariant() }\n'
+            '$userPath = [Environment]::GetEnvironmentVariable("Path", "User")\n'
+            "if ($userPath) {\n"
+            "    $parts = $userPath -split ';' | Where-Object { $_ -and $_.Trim() -ne '' }\n"
+            "    $exclude = @(\n"
+            "        & $normalize $installDir,\n"
+            '        & $normalize (Join-Path $installDir "venv\\Scripts"),\n'
+            '        & $normalize (Join-Path $homeDir "node")\n'
+            "    )\n"
+            "    $filtered = @()\n"
+            "    foreach ($part in $parts) {\n"
+            "        $norm = & $normalize $part\n"
+            "        if ($exclude -notcontains $norm) {\n"
+            "            $filtered += $part.Trim()\n"
+            "        }\n"
+            "    }\n"
+            "    [Environment]::SetEnvironmentVariable('Path', ($filtered -join ';'), 'User')\n"
+            "}\n"
+            "$currentHome = [Environment]::GetEnvironmentVariable('HERMES_HOME', 'User')\n"
+            "if (($currentHome) -and ((& $normalize $currentHome) -eq (& $normalize $homeDir))) {\n"
+            "    [Environment]::SetEnvironmentVariable('HERMES_HOME', $null, 'User')\n"
+            "}\n"
+        )
+        env = os.environ.copy()
+        env["HERMES_UNINSTALL_INSTALL_DIR"] = str(options.install_dir)
+        env["HERMES_UNINSTALL_HOME"] = str(options.hermes_home)
+        try:
+            subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    script,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=env,
+                timeout=10,
+            )
+        except Exception as exc:
+            log(f"Warning: could not clean PATH/HERMES_HOME automatically: {exc}")
+
     def open_terminal_for_setup(self, options: InstallOptions) -> None:
         self._open_terminal_with_command(options, "setup")
 

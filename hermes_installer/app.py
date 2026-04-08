@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import os
 import platform
 import subprocess
@@ -80,6 +81,7 @@ class UiBridge(QObject):
     resolved = Signal(object)
     log = Signal(str)
     install_finished = Signal(bool, str)
+    uninstall_finished = Signal(bool, str)
 
 
 class TerminalWidget(QTextEdit):
@@ -438,6 +440,7 @@ class InstallerWindow(QWidget):
         self.install_button: QPushButton
         self.setup_button: QPushButton
         self.launch_button: QPushButton
+        self.uninstall_button: QPushButton
         self.platform_value_label: QLabel
         self.log_text: QTextEdit
         self.status_label: QLabel
@@ -446,6 +449,7 @@ class InstallerWindow(QWidget):
         self.bridge.resolved.connect(self._apply_resolved_ref)
         self.bridge.log.connect(self._append_log)
         self.bridge.install_finished.connect(self._install_finished)
+        self.bridge.uninstall_finished.connect(self._uninstall_finished)
         self._resolve_ref_async()
         self._check_hermes_running()
 
@@ -567,6 +571,10 @@ class InstallerWindow(QWidget):
         self.launch_button.setEnabled(False)
         self.launch_button.clicked.connect(self._open_hermes_terminal)
         action_row.addWidget(self.launch_button)
+
+        self.uninstall_button = QPushButton("Uninstall Hermes")
+        self.uninstall_button.clicked.connect(self._uninstall_clicked)
+        action_row.addWidget(self.uninstall_button)
         action_row.addStretch(1)
         step3["content"].addLayout(action_row)
 
@@ -614,36 +622,43 @@ class InstallerWindow(QWidget):
                     text=True,
                     timeout=5,
                 )
-                running = []
-                for line in result.stdout.splitlines():
-                    lower = line.lower()
-                    if (
-                        "hermes" in lower
-                        and "hermes-installer" not in lower
-                        and "hermes_installer" not in lower
-                    ):
-                        name = line.split(",")[0].strip('"')
+                running: list[str] = []
+                for row in csv.reader(result.stdout.splitlines()):
+                    if len(row) < 2:
+                        continue
+                    name = row[0].strip()
+                    pid_raw = row[1].strip()
+                    try:
+                        pid = int(pid_raw)
+                    except ValueError:
+                        pid = None
+                    if pid == os.getpid():
+                        continue
+                    if self._is_hermes_runtime_command(name):
                         running.append(name)
             else:
                 result = subprocess.run(
-                    ["ps", "axo", "comm"],
+                    ["ps", "axo", "pid=,command="],
                     capture_output=True,
                     text=True,
                     timeout=5,
                 )
-                running = [
-                    line.strip()
-                    for line in result.stdout.splitlines()
-                    if "hermes" in line.lower()
-                    and line.strip()
-                    not in (
-                        ".//hermes-installer",
-                        "./-/bundle",
-                        "hermes_installer",
-                        "Hermes Installer",
-                        "hermes-installer",
-                    )
-                ]
+                running = []
+                for line in result.stdout.splitlines():
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    pid_raw, _, command = stripped.partition(" ")
+                    if not command:
+                        continue
+                    try:
+                        pid = int(pid_raw)
+                    except ValueError:
+                        continue
+                    if pid == os.getpid():
+                        continue
+                    if self._is_hermes_runtime_command(command):
+                        running.append(command)
         except Exception:
             return
 
@@ -656,7 +671,6 @@ class InstallerWindow(QWidget):
             names += f" and {len(unique) - 5} more"
 
         kill_cmd = "taskkill /f /im hermes.exe" if IS_WINDOWS else "pkill -f hermes"
-        kill_label = "Task Manager" if IS_WINDOWS else "pkill -f hermes"
         QMessageBox.warning(
             self,
             "Hermes Is Already Running",
@@ -668,6 +682,31 @@ class InstallerWindow(QWidget):
                 "Then run the installer again."
             ),
         )
+
+    def _is_hermes_runtime_command(self, command: str) -> bool:
+        lower = command.lower().strip()
+        if "hermes" not in lower:
+            return False
+        if (
+            "hermes installer" in lower
+            or "hermes-installer" in lower
+            or "hermes_installer" in lower
+        ):
+            return False
+
+        runtime_markers = (
+            "/hermes-agent/",
+            "\\hermes-agent\\",
+            "venv/bin/hermes",
+            "venv\\scripts\\hermes.exe",
+            "python -m hermes",
+            "hermes_cli",
+        )
+        if any(marker in lower for marker in runtime_markers):
+            return True
+
+        executable = Path(command.split()[0]).name.lower()
+        return executable.startswith("hermes") and "installer" not in executable
 
     def _create_step_card(
         self, title_text: str, subtitle_text: str
@@ -990,6 +1029,7 @@ class InstallerWindow(QWidget):
     def _set_installing(self, installing: bool) -> None:
         self.installing = installing
         self.install_button.setEnabled(not installing)
+        self.uninstall_button.setEnabled(not installing)
         self._update_step_controls()
 
     def _current_options(self) -> InstallOptions:
@@ -1093,6 +1133,60 @@ class InstallerWindow(QWidget):
 
         self.status_label.setText("Install failed. Check the log output.")
         QMessageBox.critical(self, "Install failed", message)
+
+    def _uninstall_clicked(self) -> None:
+        if self.installing:
+            return
+
+        options = self._current_options()
+        proceed = QMessageBox.question(
+            self,
+            "Uninstall Hermes?",
+            (
+                "This will remove Hermes files from:\n"
+                f"  {options.install_dir}\n"
+                f"  {options.hermes_home}\n\n"
+                "Continue?"
+            ),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if proceed != QMessageBox.Yes:
+            return
+
+        self._set_installing(True)
+        self.setup_button.setEnabled(False)
+        self.launch_button.setEnabled(False)
+        self.status_label.setText("Uninstalling Hermes...")
+        self._append_log("")
+        self._append_log(f"Starting uninstall for {self.platform.display_name}")
+
+        def worker() -> None:
+            try:
+                result = self.installer.uninstall(
+                    options,
+                    lambda line: self.bridge.log.emit(line),
+                )
+            except Exception as exc:
+                self.bridge.uninstall_finished.emit(False, str(exc))
+                return
+            self.bridge.uninstall_finished.emit(result.ok, result.message)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _uninstall_finished(self, ok: bool, message: str) -> None:
+        self._set_installing(False)
+        self._append_log(message)
+        if ok:
+            self.status_label.setText("Uninstall complete.")
+            self.log_text.show()
+            self.terminal_widget.hide()
+            self._check_hermes_running()
+            QMessageBox.information(self, "Uninstall complete", message)
+            return
+
+        self.status_label.setText("Uninstall failed. Check the log output.")
+        QMessageBox.critical(self, "Uninstall failed", message)
 
     def _open_setup_terminal(self) -> None:
         options = self._current_options()
