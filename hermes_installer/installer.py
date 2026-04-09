@@ -188,6 +188,7 @@ class HermesInstaller:
         command = self.build_install_command(script_path, options)
         env = os.environ.copy()
         env["HERMES_INSTALL_DIR"] = str(options.install_dir)
+        self._apply_git_lfs_fallback_env(env, log)
 
         log(
             f"Downloading installer from {script_url(options.ref, self.platform.script_name)}"
@@ -228,6 +229,33 @@ class HermesInstaller:
             ok=True,
             message="Hermes installed successfully",
             hermes_executable=hermes_executable,
+        )
+
+    def _apply_git_lfs_fallback_env(self, env: dict[str, str], log: LogSink) -> None:
+        if shutil.which("git-lfs"):
+            return
+
+        env["GIT_LFS_SKIP_SMUDGE"] = "1"
+
+        existing_count_raw = env.get("GIT_CONFIG_COUNT", "0")
+        try:
+            existing_count = int(existing_count_raw)
+        except ValueError:
+            existing_count = 0
+
+        configs = [
+            ("core.hooksPath", "/dev/null"),
+            ("filter.lfs.required", "false"),
+        ]
+        for offset, (key, value) in enumerate(configs):
+            index = existing_count + offset
+            env[f"GIT_CONFIG_KEY_{index}"] = key
+            env[f"GIT_CONFIG_VALUE_{index}"] = value
+        env["GIT_CONFIG_COUNT"] = str(existing_count + len(configs))
+
+        log(
+            "git-lfs not found; proceeding with Git LFS disabled for this install "
+            "(large LFS-managed assets may remain as pointer files)."
         )
 
     def uninstall(self, options: InstallOptions, log: LogSink) -> InstallResult:

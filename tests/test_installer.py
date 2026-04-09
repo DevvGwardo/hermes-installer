@@ -214,6 +214,64 @@ def test_run_install_uses_replace_for_output_decode(monkeypatch, tmp_path) -> No
     assert popen_kwargs["errors"] == "replace"
 
 
+def test_run_install_sets_git_lfs_fallback_when_lfs_missing(monkeypatch, tmp_path) -> None:
+    platform_spec = PlatformSpec.for_system("Darwin")
+    installer = HermesInstaller(platform_spec)
+    options = InstallOptions(
+        ref="main",
+        install_dir=tmp_path / "hermes-agent",
+        hermes_home=tmp_path / ".hermes",
+    )
+    script_path = tmp_path / "install.sh"
+    script_path.write_text("#!/bin/bash\necho ok\n", encoding="utf-8")
+    hermes_executable = tmp_path / "venv" / "bin" / "hermes"
+    hermes_executable.parent.mkdir(parents=True, exist_ok=True)
+    hermes_executable.write_text("", encoding="utf-8")
+    popen_kwargs: dict[str, object] = {}
+    logs: list[str] = []
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.stdout = iter(["ok\n"])
+
+        def wait(self) -> int:
+            return 0
+
+    def fake_download_script(_ref: str) -> Path:
+        return script_path
+
+    def fake_expected_path(_options: InstallOptions) -> Path:
+        return hermes_executable
+
+    def fake_popen(*_args, **kwargs):
+        popen_kwargs.update(kwargs)
+        return FakeProcess()
+
+    def fake_which(name: str) -> str | None:
+        if name == "git-lfs":
+            return None
+        return f"/usr/bin/{name}"
+
+    monkeypatch.setattr(installer, "download_script", fake_download_script)
+    monkeypatch.setattr(installer, "expected_hermes_executable", fake_expected_path)
+    monkeypatch.setattr(installer_module.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(installer_module.shutil, "rmtree", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(installer_module.shutil, "which", fake_which)
+
+    result = installer.run_install(options, log=logs.append)
+    env = popen_kwargs["env"]
+
+    assert result.ok is True
+    assert isinstance(env, dict)
+    assert env["GIT_LFS_SKIP_SMUDGE"] == "1"
+    assert env["GIT_CONFIG_COUNT"] == "2"
+    assert env["GIT_CONFIG_KEY_0"] == "core.hooksPath"
+    assert env["GIT_CONFIG_VALUE_0"] == "/dev/null"
+    assert env["GIT_CONFIG_KEY_1"] == "filter.lfs.required"
+    assert env["GIT_CONFIG_VALUE_1"] == "false"
+    assert any("git-lfs not found" in line for line in logs)
+
+
 def test_uninstall_removes_install_dir_and_home(monkeypatch, tmp_path) -> None:
     platform_spec = PlatformSpec.for_system("Darwin")
     installer = HermesInstaller(platform_spec)
