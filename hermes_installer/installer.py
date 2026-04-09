@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import ssl
 import shutil
 import stat
 import subprocess
@@ -8,7 +9,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
-from urllib.request import urlretrieve
+from urllib.error import URLError
+from urllib.request import Request, urlopen, urlretrieve
 
 from .platforms import PlatformSpec
 from .upstream import script_url
@@ -30,6 +32,7 @@ WINGET_INSTALL_TIMEOUT_BLOCK = """            $wingetProc = Start-Process -FileP
             if ($wingetProc.ExitCode -ne 0) {
                 throw "winget failed with exit code $($wingetProc.ExitCode)"
             }"""
+DOWNLOAD_TIMEOUT_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -55,12 +58,61 @@ class HermesInstaller:
     def download_script(self, ref: str) -> Path:
         temp_dir = Path(tempfile.mkdtemp(prefix="hermes-installer-"))
         destination = temp_dir / self.platform.script_name
-        urlretrieve(script_url(ref, self.platform.script_name), destination)
+        self._download_script_file(script_url(ref, self.platform.script_name), destination)
         if self.platform.is_windows:
             self._ensure_utf8_bom(destination)
         if self.platform.is_macos:
             destination.chmod(destination.stat().st_mode | stat.S_IXUSR)
         return destination
+
+    def _download_script_file(self, url: str, destination: Path) -> None:
+        cert_error: URLError | None = None
+        try:
+            urlretrieve(url, destination)
+            return
+        except URLError as exc:
+            if not self._is_certificate_verification_error(exc):
+                raise
+            cert_error = exc
+
+        cafile = self._certifi_cafile()
+        if not cafile:
+            raise RuntimeError(
+                "TLS certificate verification failed while downloading the installer script, "
+                "and no CA bundle fallback is available. Install the `certifi` package or set "
+                "SSL_CERT_FILE to a trusted CA bundle."
+            ) from cert_error
+
+        request = Request(url, headers={"User-Agent": "hermes-installer"})
+        context = ssl.create_default_context(cafile=cafile)
+        try:
+            with urlopen(
+                request,
+                context=context,
+                timeout=DOWNLOAD_TIMEOUT_SECONDS,
+            ) as response:
+                destination.write_bytes(response.read())
+        except Exception as fallback_exc:
+            raise RuntimeError(
+                "TLS certificate verification failed while downloading the installer script "
+                "even after retrying with a bundled CA bundle. If you're behind a corporate "
+                "proxy, set SSL_CERT_FILE to your organization's CA certificate path."
+            ) from fallback_exc
+
+    def _is_certificate_verification_error(self, error: URLError) -> bool:
+        reason = getattr(error, "reason", None)
+        if isinstance(reason, ssl.SSLCertVerificationError):
+            return True
+        if isinstance(reason, ssl.SSLError) and "CERTIFICATE_VERIFY_FAILED" in str(reason):
+            return True
+        return "CERTIFICATE_VERIFY_FAILED" in str(error)
+
+    def _certifi_cafile(self) -> str | None:
+        try:
+            import certifi
+        except Exception:
+            return None
+        return certifi.where()
 
     def _ensure_utf8_bom(self, script_path: Path) -> None:
         raw = script_path.read_bytes()

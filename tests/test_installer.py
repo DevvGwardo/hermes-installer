@@ -1,4 +1,6 @@
+import ssl
 from pathlib import Path
+from urllib.error import URLError
 
 import hermes_installer.installer as installer_module
 from hermes_installer.installer import HermesInstaller, InstallOptions
@@ -100,6 +102,58 @@ def test_download_script_windows_patches_winget_install_timeout(monkeypatch, tmp
     assert "$wingetProc = Start-Process -FilePath \"winget\"" in text
     assert "WaitForExit(180000)" in text
     assert "continuing with Node zip fallback" in text
+
+
+def test_download_script_retries_with_certifi_on_cert_failure(monkeypatch, tmp_path) -> None:
+    platform_spec = PlatformSpec.for_system("Darwin")
+    installer = HermesInstaller(platform_spec)
+    temp_dir = tmp_path / "hermes-installer-3"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    source_script = b"#!/bin/bash\necho 'ok'\n"
+    fallback_cafile = tmp_path / "certifi.pem"
+    fallback_cafile.write_text("dummy", encoding="utf-8")
+    observed: dict[str, object] = {}
+
+    def fake_mkdtemp(prefix: str) -> str:
+        assert prefix == "hermes-installer-"
+        return str(temp_dir)
+
+    def fake_urlretrieve(_url: str, _destination: Path):
+        raise URLError(ssl.SSLCertVerificationError("CERTIFICATE_VERIFY_FAILED"))
+
+    class FakeResponse:
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return source_script
+
+    def fake_urlopen(request, context=None, timeout=0):
+        observed["url"] = request.full_url
+        observed["context"] = context
+        observed["timeout"] = timeout
+        return FakeResponse()
+
+    class DummyContext:
+        pass
+
+    monkeypatch.setattr(installer_module.tempfile, "mkdtemp", fake_mkdtemp)
+    monkeypatch.setattr(installer_module, "urlretrieve", fake_urlretrieve)
+    monkeypatch.setattr(installer_module, "urlopen", fake_urlopen)
+    monkeypatch.setattr(installer, "_certifi_cafile", lambda: str(fallback_cafile))
+    monkeypatch.setattr(
+        installer_module.ssl, "create_default_context", lambda cafile=None: DummyContext()
+    )
+
+    script_path = installer.download_script("v2026.4.8")
+
+    assert script_path.read_bytes() == source_script
+    assert observed["url"].endswith("/v2026.4.8/scripts/install.sh")
+    assert observed["context"] is not None
+    assert observed["timeout"] == installer_module.DOWNLOAD_TIMEOUT_SECONDS
 
 
 def test_expected_hermes_path_matches_platform_layout() -> None:
